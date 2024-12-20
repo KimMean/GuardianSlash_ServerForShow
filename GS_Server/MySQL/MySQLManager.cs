@@ -4,6 +4,7 @@ using System.Linq;
 using System.Reflection.Metadata.Ecma335;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Transactions;
 using System.Xml.Linq;
@@ -29,8 +30,8 @@ namespace GS_Server.MySQL
             }
         }
 
-        const string ServerIP = "localhost";      // DB 서버 주소, 로컬일 경우 localhost
-        const int ServerPort = 0000;                  //DB 서버 포트
+        const string ServerIP = "private";      // DB 서버 주소, 로컬일 경우 localhost
+        const int ServerPort = private;                  //DB 서버 포트
         const string DB_Name = "private";       //DB 이름
         const string UserID = "private";            //계정 아이디
         const string UserPWD = "private";        //계정 비밀번호
@@ -39,8 +40,10 @@ namespace GS_Server.MySQL
         const int MinPoolSize = 0;
         const int MaxPoolSize = 10;     // (CPU Core * 2) + effective_spindle_count
 
-        private MySqlConnection connection;
-        private MySqlTransaction transaction;
+        //private MySqlConnection connection;
+        //private MySqlTransaction transaction;
+        private ThreadLocal<MySqlConnection> connection;
+        private ThreadLocal<MySqlTransaction> transaction;
 
         int ConnectCount = 0;
 
@@ -59,7 +62,9 @@ namespace GS_Server.MySQL
         public MySQLManager()
         {
             Console.WriteLine("MySQLManager constructor");
-            connection = new MySqlConnection(connectionAddress);
+            //connection = new MySqlConnection(connectionAddress);
+            connection = new ThreadLocal<MySqlConnection>();
+            transaction = new ThreadLocal<MySqlTransaction>();
         }
 
         public void Init()
@@ -70,13 +75,15 @@ namespace GS_Server.MySQL
         // 트랜잭션 시작
         public void BeginTransaction()
         {
-            if (connection.State != System.Data.ConnectionState.Open)
+            connection.Value = new MySqlConnection(connectionAddress); // 각 요청마다 새 연결 생성
+            if (connection.Value.State != System.Data.ConnectionState.Open)
             {
-                connection.Open();
+                connection.Value.Open();
+
                 ConnectCount++;
-                Console.WriteLine($"Connection Open : {ConnectCount}");
+                Console.WriteLine($"MySQL Connection Open : {ConnectCount}");
             }
-            transaction = connection.BeginTransaction();
+            transaction.Value = connection.Value.BeginTransaction();
             //Console.WriteLine("Transaction started.");
         }
 
@@ -85,9 +92,9 @@ namespace GS_Server.MySQL
         {
             try
             {
-                if (transaction != null)
+                if (transaction.Value != null)
                 {
-                    transaction.Commit();
+                    transaction.Value.Commit();
                     //Console.WriteLine("Transaction committed.");
                 }
             }
@@ -108,9 +115,9 @@ namespace GS_Server.MySQL
         {
             try
             {
-                if (transaction != null)
+                if (transaction.Value != null)
                 {
-                    transaction.Rollback();
+                    transaction.Value.Rollback();
                     Console.WriteLine("Transaction rolled back.");
                 }
             }
@@ -126,21 +133,56 @@ namespace GS_Server.MySQL
         // 트랜잭션 정리 및 연결 종료
         private void CleanupTransaction()
         {
-            if (transaction != null)
+            if (transaction.Value != null)
             {
-                transaction.Dispose();
-                transaction = null;
+                transaction.Value.Dispose();
+                transaction.Value = null;
             }
 
-            if (connection != null && connection.State == System.Data.ConnectionState.Open)
+            if (connection.Value != null && connection.Value.State == System.Data.ConnectionState.Open)
             {
-                connection.Close();
+                connection.Value.Close();
 
                 ConnectCount--;
-                Console.WriteLine($"Connection Close : {ConnectCount}");
+                Console.WriteLine($"MySQL Connection Close : {ConnectCount}");
                 //Console.WriteLine("Connection closed.");
             }
         }
+
+        public void GetInformationData(ref Dictionary<string, AppInformation> appInfo)
+        {
+            try
+            {
+                using (MySqlCommand cmd = new MySqlCommand("GetInformationData", connection.Value))
+                {
+                    cmd.CommandType = System.Data.CommandType.StoredProcedure;
+                    using (MySqlDataReader reader = cmd.ExecuteReader())
+                    {
+                        InformationPacket infoPacket = new InformationPacket();
+                        while (reader.Read())
+                        {
+                            string platform = reader["Platform"].ToString();
+                            string version = reader["Version"].ToString();
+                            string url = reader["URL"].ToString();
+
+                            AppInformation info;
+                            info.platform = platform;
+                            info.version = version;
+                            info.url = url;
+
+                            appInfo.Add(platform, info);
+                        }
+                    }
+
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error: {ex.Message}");
+                throw;
+            }
+        }
+
 
         /*
          * 회원가입을 진행
@@ -153,7 +195,7 @@ namespace GS_Server.MySQL
             try
             {
                 string query = $"SELECT SignUp({(int)providerCode}, '{userID}') AS Result;";
-                using (MySqlCommand command = new MySqlCommand(query, connection))
+                using (MySqlCommand command = new MySqlCommand(query, connection.Value))
                 {
                     using (MySqlDataReader reader = command.ExecuteReader())
                     {
@@ -180,7 +222,7 @@ namespace GS_Server.MySQL
             {
                 string query = $"SELECT GuestLogin('{userID}', '{accessToken}') AS Result;";
 
-                using (MySqlCommand command = new MySqlCommand(query, connection))
+                using (MySqlCommand command = new MySqlCommand(query, connection.Value))
                 {
                     using (MySqlDataReader reader = command.ExecuteReader())
                     {
@@ -210,7 +252,7 @@ namespace GS_Server.MySQL
             try
             {
                 string query = $"SELECT Login({(int)provider}, '{userID}', '{accessToken}') AS Result;";
-                using (MySqlCommand command = new MySqlCommand(query, connection))
+                using (MySqlCommand command = new MySqlCommand(query, connection.Value))
                 {
                     using (MySqlDataReader reader = command.ExecuteReader())
                     {
@@ -237,7 +279,7 @@ namespace GS_Server.MySQL
             clearStage = 0;
             try
             {
-                using (MySqlCommand cmd = new MySqlCommand("GetUserClearStage", connection))
+                using (MySqlCommand cmd = new MySqlCommand("GetUserClearStage", connection.Value))
                 {
                     cmd.CommandType = System.Data.CommandType.StoredProcedure;
 
@@ -276,7 +318,7 @@ namespace GS_Server.MySQL
             dia = 0;
             try
             {
-                using (MySqlCommand cmd = new MySqlCommand("GetUserCurrencies", connection))
+                using (MySqlCommand cmd = new MySqlCommand("GetUserCurrencies", connection.Value))
                 {
                     cmd.CommandType = System.Data.CommandType.StoredProcedure;
 
@@ -316,7 +358,7 @@ namespace GS_Server.MySQL
         {
             try
             {
-                using (MySqlCommand cmd = new MySqlCommand("GetWeaponData", connection))
+                using (MySqlCommand cmd = new MySqlCommand("GetWeaponData", connection.Value))
                 {
                     cmd.CommandType = System.Data.CommandType.StoredProcedure;
                     using (MySqlDataReader reader = cmd.ExecuteReader())
@@ -350,7 +392,7 @@ namespace GS_Server.MySQL
             bool result = false;
             try
             {
-                using (MySqlCommand cmd = new MySqlCommand("GetUserWeaponData", connection))
+                using (MySqlCommand cmd = new MySqlCommand("GetUserWeaponData", connection.Value))
                 {
                     cmd.CommandType = System.Data.CommandType.StoredProcedure;
 
@@ -392,7 +434,7 @@ namespace GS_Server.MySQL
             result = false;
             try
             {
-                using (MySqlCommand cmd = new MySqlCommand("WeaponEnhancement", connection))
+                using (MySqlCommand cmd = new MySqlCommand("WeaponEnhancement", connection.Value))
                 {
                     cmd.CommandType = System.Data.CommandType.StoredProcedure;
 
@@ -446,7 +488,7 @@ namespace GS_Server.MySQL
         {
             try
             {
-                using (MySqlCommand cmd = new MySqlCommand("GetNecklaceData", connection))
+                using (MySqlCommand cmd = new MySqlCommand("GetNecklaceData", connection.Value))
                 {
                     cmd.CommandType = System.Data.CommandType.StoredProcedure;
                     using (MySqlDataReader reader = cmd.ExecuteReader())
@@ -484,7 +526,7 @@ namespace GS_Server.MySQL
             bool result = false;
             try
             {
-                using (MySqlCommand cmd = new MySqlCommand("GetUserNecklaceData", connection))
+                using (MySqlCommand cmd = new MySqlCommand("GetUserNecklaceData", connection.Value))
                 {
                     cmd.CommandType = System.Data.CommandType.StoredProcedure;
 
@@ -517,7 +559,7 @@ namespace GS_Server.MySQL
         {
             try
             {
-                using (MySqlCommand cmd = new MySqlCommand("GetRingData", connection))
+                using (MySqlCommand cmd = new MySqlCommand("GetRingData", connection.Value))
                 {
                     cmd.CommandType = System.Data.CommandType.StoredProcedure;
                     using (MySqlDataReader reader = cmd.ExecuteReader())
@@ -554,7 +596,7 @@ namespace GS_Server.MySQL
             bool result = false;
             try
             {
-                using (MySqlCommand cmd = new MySqlCommand("GetUserRingData", connection))
+                using (MySqlCommand cmd = new MySqlCommand("GetUserRingData", connection.Value))
                 {
                     cmd.CommandType = System.Data.CommandType.StoredProcedure;
 
@@ -591,7 +633,7 @@ namespace GS_Server.MySQL
             ringCode = "";
             try
             {
-                using (MySqlCommand cmd = new MySqlCommand("GetUserEquipment", connection))
+                using (MySqlCommand cmd = new MySqlCommand("GetUserEquipment", connection.Value))
                 {
                     cmd.CommandType = System.Data.CommandType.StoredProcedure;
 
@@ -637,7 +679,7 @@ namespace GS_Server.MySQL
             };
             try
             {
-                using (MySqlCommand cmd = new MySqlCommand(procedureString, connection))
+                using (MySqlCommand cmd = new MySqlCommand(procedureString, connection.Value))
                 {
                     cmd.CommandType = System.Data.CommandType.StoredProcedure;
 
@@ -670,7 +712,7 @@ namespace GS_Server.MySQL
             result = false;
             try
             {
-                using (MySqlCommand cmd = new MySqlCommand("UpdateUserCurrency", connection))
+                using (MySqlCommand cmd = new MySqlCommand("UpdateUserCurrency", connection.Value))
                 {
                     cmd.CommandType = System.Data.CommandType.StoredProcedure;
 
@@ -705,7 +747,7 @@ namespace GS_Server.MySQL
             result = false;
             try
             {
-                using (MySqlCommand cmd = new MySqlCommand("UpdateUserCurrency", connection))
+                using (MySqlCommand cmd = new MySqlCommand("UpdateUserCurrency", connection.Value))
                 {
                     cmd.CommandType = System.Data.CommandType.StoredProcedure;
 
@@ -740,7 +782,7 @@ namespace GS_Server.MySQL
             result = false;
             try
             {
-                using (MySqlCommand cmd = new MySqlCommand("EndGame", connection))
+                using (MySqlCommand cmd = new MySqlCommand("EndGame", connection.Value))
                 {
                     cmd.CommandType = System.Data.CommandType.StoredProcedure;
 
@@ -787,7 +829,7 @@ namespace GS_Server.MySQL
             result = false;
             try
             {
-                using (MySqlCommand cmd = new MySqlCommand("GoogleInAppPurchase", connection))
+                using (MySqlCommand cmd = new MySqlCommand("GoogleInAppPurchase", connection.Value))
                 {
                     cmd.CommandType = System.Data.CommandType.StoredProcedure;
 
@@ -827,7 +869,7 @@ namespace GS_Server.MySQL
             //using (MySqlConnection connection = new MySqlConnection(connectionAddress))
             try
             {
-                using (MySqlCommand cmd = new MySqlCommand("InGameItemPurchase", connection))
+                using (MySqlCommand cmd = new MySqlCommand("InGameItemPurchase", connection.Value))
                 {
                     cmd.CommandType = System.Data.CommandType.StoredProcedure;
 
@@ -862,7 +904,7 @@ namespace GS_Server.MySQL
         {
             try
             {
-                using (MySqlCommand cmd = new MySqlCommand("ItemGrantedCompleted", connection))
+                using (MySqlCommand cmd = new MySqlCommand("ItemGrantedCompleted", connection.Value))
                 {
                     cmd.CommandType = System.Data.CommandType.StoredProcedure;
 
@@ -898,7 +940,7 @@ namespace GS_Server.MySQL
 
             try
             {
-                using (MySqlCommand cmd = new MySqlCommand(storedProcedureName, connection))
+                using (MySqlCommand cmd = new MySqlCommand(storedProcedureName, connection.Value))
                 {
                     cmd.CommandType = System.Data.CommandType.StoredProcedure;
 
@@ -956,7 +998,7 @@ namespace GS_Server.MySQL
             result = false;
             try
             {
-                using (MySqlCommand cmd = new MySqlCommand("AddNecklaceList", connection))
+                using (MySqlCommand cmd = new MySqlCommand("AddNecklaceList", connection.Value))
                 {
                     cmd.CommandType = System.Data.CommandType.StoredProcedure;
 
@@ -987,7 +1029,7 @@ namespace GS_Server.MySQL
             result = false;
             try
             {
-                using (MySqlCommand cmd = new MySqlCommand("AddRingList", connection))
+                using (MySqlCommand cmd = new MySqlCommand("AddRingList", connection.Value))
                 {
                     cmd.CommandType = System.Data.CommandType.StoredProcedure;
 
@@ -1018,7 +1060,7 @@ namespace GS_Server.MySQL
         {
             try
             {
-                using (MySqlCommand cmd = new MySqlCommand("GetProductData", connection))
+                using (MySqlCommand cmd = new MySqlCommand("GetProductData", connection.Value))
                 {
                     cmd.CommandType = System.Data.CommandType.StoredProcedure;
                     using (MySqlDataReader reader = cmd.ExecuteReader())

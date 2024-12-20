@@ -14,27 +14,79 @@ namespace GS_Server.Session
 {
     class GameSession : PacketSession
     {
+        private const int HeartbeatInterval = 5000; // 5초 간격
+        private const int HeartbeatTimeout = 30000; // 30초
+        private DateTime _lastHeartbeatTime;
+        private bool _isConnected = false;
+
         public override void OnConnected(EndPoint endPoint)
         {
             Console.WriteLine($"OnConnected {endPoint}");
-
+            _isConnected = true;
+            _lastHeartbeatTime = DateTime.Now;
             //byte[] sendBuff = Encoding.UTF8.GetBytes("Welcome to Game Server ! ");
             //Send(sendBuff);
 
             //Thread.Sleep(5000);
             //Disconnect();
+            //Console.WriteLine()
+            //SendHeartbeat();
+            Task.Run(() => Heartbeat());
+        }
+
+        private async Task Heartbeat()
+        {
+
+            while(_isConnected)
+            {
+                await Task.Delay(HeartbeatInterval); // 5초 대기
+                SendHeartbeat();
+                //Console.WriteLine($"Hartbeat : {_lastHeartbeatTime}");
+
+                if ((DateTime.Now - _lastHeartbeatTime).TotalMilliseconds > HeartbeatTimeout)
+                {
+                    Console.WriteLine("Heartbeat timeout. Disconnecting...");
+                    Disconnect();
+                    break;
+                }
+            }
+
+        }
+
+        public override void OnDisconnected(EndPoint endPoint)
+        {
+            Console.WriteLine($"OnDisconnected {endPoint}");
+            _isConnected = false;
+        }
+
+        public override void OnSend(int numOfBytes)
+        {
+            //Console.WriteLine($"Transferred bytes : {numOfBytes}");
         }
 
         public override void OnReceivePacket(ArraySegment<byte> buffer)
         {
             ushort size = BitConverter.ToUInt16(buffer.Array, buffer.Offset);   // Unused
-            ushort cmd = BitConverter.ToUInt16(buffer.Array, buffer.Offset+2);
+            ushort cmd = BitConverter.ToUInt16(buffer.Array, buffer.Offset + 2);
 
-            Console.WriteLine($"Command : {cmd}");
             Command command = (Command)cmd;
+
+            if(command != Command.Heartbeat)
+                Console.WriteLine($"Command : {cmd}");
+
             switch (command)
             {
                 case Command.NONE: break;
+                case Command.Heartbeat:
+                    {
+                        _lastHeartbeatTime = DateTime.Now;
+                        break;
+                    }
+                case Command.Information:
+                    {
+                        AppInformation(new ArraySegment<byte>(buffer.Array, buffer.Offset + 4, buffer.Count - 4));
+                        break;
+                    }
                 case Command.GuestSignUP:
                     {
                         GuestSignUp();
@@ -131,14 +183,17 @@ namespace GS_Server.Session
                     }
             }
         }
-        public override void OnDisconnected(EndPoint endPoint)
+
+        void SendHeartbeat()
         {
-            Console.WriteLine($"OnDisconnected {endPoint}");
+            HeartbeatPacket heartbeatPacket = new HeartbeatPacket();
+            Send(heartbeatPacket.GetHeartbeatPacket());
         }
 
-        public override void OnSend(int numOfBytes)
+        void AppInformation(ArraySegment<byte> buffer)
         {
-            //Console.WriteLine($"Transferred bytes : {numOfBytes}");
+            InformationPacket infoPacket = new InformationPacket();
+            Send(infoPacket.GetInformationDataPacket(buffer));
         }
 
         void GuestSignUp()

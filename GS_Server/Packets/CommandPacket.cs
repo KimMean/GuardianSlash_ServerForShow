@@ -10,6 +10,8 @@ namespace GS_Server.Packets
     public enum Command
     {
         NONE = 0,
+        Heartbeat = 1,
+        Information = 2,
         GuestSignUP = 10,
         GoogleSignUP = 11,
         GuestLogin = 20,

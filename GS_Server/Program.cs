@@ -20,6 +20,7 @@ namespace GS_Server
         {
             MySQLManager.Instance.Init();
             MySQLManager.Instance.BeginTransaction();
+            InformationPacket.InitInformationData();
             WeaponPacket.InitWeaponData();
             NecklacePacket.InitNecklaceData();
             RingPacket.InitRingData();
@@ -29,7 +30,7 @@ namespace GS_Server
             string host = Dns.GetHostName();
             IPHostEntry ipHost = Dns.GetHostEntry(host);
             IPAddress ip = ipHost.AddressList[0];
-            IPEndPoint endPoint = new IPEndPoint(ip, 0000);
+            IPEndPoint endPoint = new IPEndPoint(ip, private);
 
             _Listener.Init(endPoint, () => { return new GameSession(); });
             Console.WriteLine("Listening...");

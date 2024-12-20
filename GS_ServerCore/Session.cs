@@ -29,7 +29,7 @@ namespace GS_ServerCore
                     break;
 
                 // 패킷 조립 가능
-                Console.WriteLine($"ReceiveData : {buffer.Count}");
+                //Console.WriteLine($"ReceiveData : {buffer.Count}");
                 OnReceivePacket(new ArraySegment<byte>(buffer.Array, buffer.Offset, dataSize));
 
                 processLen += dataSize;
